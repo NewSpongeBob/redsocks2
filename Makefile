@@ -104,7 +104,8 @@ gen/version.c: *.c *.h gen/.build
 	echo '#include "../version.h"' >> $@.tmp
 	echo 'const char* redsocks_version = ' >> $@.tmp
 	if [ -d .git ]; then \
-		echo '"redsocks.git/'`git describe --tags`' $(CRYPTO)"'; \
+		GIT_VER=$$(git describe --tags 2>/dev/null || echo "$(VERSION)-$$(git rev-parse --short HEAD)"); \
+		echo "\"redsocks.git/$$GIT_VER $(CRYPTO)\""; \
 		if [ `git status --porcelain | grep -v -c '^??'` != 0 ]; then \
 			echo '"-unclean"'; \
 		fi; \

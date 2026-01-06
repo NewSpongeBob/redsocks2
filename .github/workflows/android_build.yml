@@ -1,0 +1,79 @@
+name: android_build
+
+on:
+  push:
+    branches: [ master, main ]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  NDK_VERSION: r26b
+  OPENSSL_VERSION: "1.1.1w"
+  LIBEVENT_VERSION: "2.1.12-stable"
+  API: 21
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            ndk_abi: aarch64-linux-android
+            openssl_target: android-arm64
+          - arch: arm
+            ndk_abi: armv7a-linux-androideabi
+            openssl_target: android-arm
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup NDK
+      run: |
+        wget -q https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip
+        unzip -q android-ndk-${{ env.NDK_VERSION }}-linux.zip
+        echo "NDK=$PWD/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+        echo "ANDROID_NDK_ROOT=$PWD/android-ndk-${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+    - name: Set toolchain
+      run: |
+        TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+        echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+        echo "PATH=$TOOLCHAIN/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=$TOOLCHAIN/bin/${{ matrix.ndk_abi }}${{ env.API }}-clang" >> $GITHUB_ENV
+        echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+        echo "PREFIX=$PWD/deps" >> $GITHUB_ENV
+
+    - name: Build OpenSSL
+      run: |
+        wget -q https://www.openssl.org/source/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        tar xzf openssl-${{ env.OPENSSL_VERSION }}.tar.gz && cd openssl-${{ env.OPENSSL_VERSION }}
+        export ANDROID_NDK_HOME=$NDK
+        ./Configure ${{ matrix.openssl_target }} -D__ANDROID_API__=${{ env.API }} --prefix=$PREFIX no-shared no-tests
+        make -j$(nproc) && make install_sw
+
+    - name: Build libevent
+      run: |
+        wget -q https://github.com/libevent/libevent/releases/download/release-${{ env.LIBEVENT_VERSION }}/libevent-${{ env.LIBEVENT_VERSION }}.tar.gz
+        tar xzf libevent-${{ env.LIBEVENT_VERSION }}.tar.gz && cd libevent-${{ env.LIBEVENT_VERSION }}
+        ./configure --host=${{ matrix.ndk_abi }} --prefix=$PREFIX --disable-shared --disable-openssl --disable-samples --disable-libevent-regress CC="$CC"
+        make -j$(nproc) && make install
+
+    - name: Build redsocks2
+      run: |
+        echo "#define USE_IPTABLES" > config.h
+        make CC="$CC" \
+          CFLAGS="-I$PREFIX/include -O3 -fPIE -DDISABLE_SHADOWSOCKS" \
+          LDFLAGS="-L$PREFIX/lib -pie $PREFIX/lib/libssl.a $PREFIX/lib/libcrypto.a $PREFIX/lib/libevent.a $PREFIX/lib/libevent_core.a" \
+          LIBS="" DISABLE_SHADOWSOCKS=1
+        $STRIP redsocks2
+        mv redsocks2 redsocks2-android-${{ matrix.arch }}
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: redsocks2-android-${{ matrix.arch }}
+        path: redsocks2-android-${{ matrix.arch }}
